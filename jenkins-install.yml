@@ -4,6 +4,14 @@
   become: yes
   tasks:
 
+    - name : clone code
+      git:
+        repo: 'https://github.com/rwirba1/ansible-ci.git'
+        dest: '/home/ubuntu/ansible-ci'
+        clone: yes
+        update: yes
+
+
     - name: Ensure APT is Installed
       apt:
         update_cache: yes
