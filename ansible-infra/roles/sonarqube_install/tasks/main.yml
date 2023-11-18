@@ -1,0 +1,134 @@
+---
+- name: Configure and Install SonarQube and PostgreSQL
+  hosts: your_target_hosts
+  become: yes
+  vars:
+    postgres_password: admin123
+    sonarqube_version: "8.3.0.34182"
+    sonar_db_username: sonar
+    sonar_db_password: admin123
+    nginx_server_name: sonarqube.groophy.in
+
+  tasks:
+    - name: Backup sysctl.conf
+      ansible.builtin.copy:
+        src: /etc/sysctl.conf
+        dest: /root/sysctl.conf_backup
+        remote_src: yes
+
+    - name: Configure sysctl
+      ansible.builtin.blockinfile:
+        path: /etc/sysctl.conf
+        block: |
+          vm.max_map_count=262144
+          fs.file-max=65536
+        marker: "# {mark} ANSIBLE MANAGED BLOCK"
+
+    - name: Backup limits.conf
+      ansible.builtin.copy:
+        src: /etc/security/limits.conf
+        dest: /root/sec_limit.conf_backup
+        remote_src: yes
+
+    - name: Configure limits.conf
+      ansible.builtin.blockinfile:
+        path: /etc/security/limits.conf
+        block: |
+          sonarqube   -   nofile   65536
+          sonarqube   -   nproc    4096
+        marker: "# {mark} ANSIBLE MANAGED BLOCK"
+
+    - name: Install OpenJDK 11
+      ansible.builtin.apt:
+        name: openjdk-11-jdk
+        state: present
+
+    - name: Add PostgreSQL repository
+      ansible.builtin.apt_repository:
+        repo: deb http://apt.postgresql.org/pub/repos/apt/ `lsb_release -cs`-pgdg main
+        filename: pgdg
+
+    - name: Install PostgreSQL
+      ansible.builtin.apt:
+        name:
+          - postgresql
+          - postgresql-contrib
+        state: present
+        update_cache: yes
+
+    - name: Start and enable PostgreSQL service
+      ansible.builtin.service:
+        name: postgresql
+        state: started
+        enabled: yes
+
+    - name: Set PostgreSQL password
+      ansible.builtin.command: sudo echo "postgres:{{ postgres_password }}" | chpasswd
+      changed_when: false
+
+    - name: PostgreSQL user and database setup
+      ansible.builtin.postgresql_user:
+        db: sonarqube
+        name: "{{ sonar_db_username }}"
+        password: "{{ sonar_db_password }}"
+        priv: ALL
+        role_attr_flags: CREATEDB,LOGIN
+        state: present
+
+    - name: Download SonarQube
+      ansible.builtin.get_url:
+        url: https://binaries.sonarsource.com/Distribution/sonarqube/sonarqube-{{ sonarqube_version }}.zip
+        dest: /tmp/sonarqube.zip
+
+    - name: Install unzip
+      ansible.builtin.apt:
+        name: unzip
+        state: present
+
+    - name: Extract SonarQube
+      ansible.builtin.unarchive:
+        src: /tmp/sonarqube.zip
+        dest: /opt/
+        remote_src: yes
+      register: sq_extract
+
+    - name: Rename SonarQube directory
+      ansible.builtin.command: mv /opt/sonarqube-{{ sonarqube_version }}/ /opt/sonarqube
+      when: sq_extract is changed
+      changed_when: true
+
+    - name: Add SonarQube user and group
+      ansible.builtin.user:
+        name: sonar
+        group: sonar
+        create_home: no
+        system: yes
+
+    - name: Set permissions for SonarQube
+      ansible.builtin.file:
+        path: /opt/sonarqube
+        owner: sonar
+        group: sonar
+        recurse: yes
+
+    - name: Configure SonarQube
+      ansible.builtin.template:
+        src: sonar.properties.j2
+        dest: /opt/sonarqube/conf/sonar.properties
+
+    - name: Create SonarQube service file
+      ansible.builtin.template:
+        src: sonarqube.service.j2
+        dest: /etc/systemd/system/sonarqube.service
+        mode: '0644'
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: yes
+
+    - name: Enable SonarQube service
+      ansible.builtin.service:
+        name: sonarqube
+        enabled: yes
+
+   
